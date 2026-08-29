@@ -32,6 +32,7 @@ export default function NetworkScene({ agents, flows, selected, pov, onSelect }:
 }) {
   const positionMap = useMemo(() => new Map(agents.map((a, i) => [a.from, positions[i % positions.length]])), [agents]);
   const newestSeq = agents.reduce((max, a) => Math.max(max, a.seq || 0), 0);
+
   return (
     <div className="scene3d">
       <Canvas camera={{ position: [0, 8.5, 14], fov: 46 }} dpr={[1, 1.6]}>
@@ -49,7 +50,14 @@ export default function NetworkScene({ agents, flows, selected, pov, onSelect }:
           return <FlowPath key={flow.id} start={start} end={end} kind={flow.kind} offset={i * 0.13} />;
         })}
         {agents.map((agent, index) => (
-          <AgentNode key={agent.from} agent={agent} position={positions[index % positions.length]} active={selected === agent.from} fresh={newestSeq-agent.seq<3} onSelect={() => onSelect(agent.from)} />
+          <AgentNode
+            key={agent.from}
+            agent={agent}
+            position={positions[index % positions.length]}
+            active={selected === agent.from}
+            fresh={newestSeq - agent.seq < 3}
+            onSelect={() => onSelect(agent.from)}
+          />
         ))}
         <CameraDirector selected={selected} pov={pov} positionMap={positionMap} />
         <OrbitControls enabled={!pov} enablePan={false} minDistance={7} maxDistance={22} minPolarAngle={0.48} maxPolarAngle={1.38} autoRotate={!selected} autoRotateSpeed={0.24} />
@@ -65,6 +73,7 @@ function Core() {
     if (ref.current) ref.current.rotation.y += delta * 0.45;
     if (ring.current) ring.current.rotation.z -= delta * 0.18;
   });
+
   return <group position={[0, 1.2, 0]}>
     <mesh ref={ref}><icosahedronGeometry args={[1.2, 2]} /><meshStandardMaterial color="#0b6f82" emissive="#20d9ef" emissiveIntensity={1.5} wireframe /></mesh>
     <mesh ref={ring} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[1.8, 0.025, 10, 96]} /><meshBasicMaterial color="#4df4ff" transparent opacity={0.42} /></mesh>
@@ -81,10 +90,11 @@ function District({ name, position, index }: { name: string; position: [number, 
       pulse.current.scale.setScalar(s);
     }
   });
+
   return <group position={position}>
     <mesh rotation={[-Math.PI / 2, 0, 0]}><cylinderGeometry args={[1.7, 2, 0.18, 6]} /><meshStandardMaterial color="#06151b" emissive="#0e6978" emissiveIntensity={0.35} metalness={0.8} roughness={0.35} /></mesh>
     <mesh ref={pulse} position={[0, 0.16, 0]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[1.45, 1.55, 48]} /><meshBasicMaterial color="#27d9e8" transparent opacity={0.18} side={THREE.DoubleSide} /></mesh>
-    {[[-0.6, .6, 0], [0, 1.05, .1], [.62, .75, -.08]].map((p, i) => <mesh key={i} position={p as [number, number, number]}><boxGeometry args={[0.42, 1.3 + i * .4, 0.42]} /><meshStandardMaterial color="#071d24" emissive="#12a6b7" emissiveIntensity={0.45} /></mesh>)}
+    {[[-0.6, 0.6, 0], [0, 1.05, 0.1], [0.62, 0.75, -0.08]].map((p, i) => <mesh key={i} position={p as [number, number, number]}><boxGeometry args={[0.42, 1.3 + i * 0.4, 0.42]} /><meshStandardMaterial color="#071d24" emissive="#12a6b7" emissiveIntensity={0.45} /></mesh>)}
     <Text position={[0, 1.95, 0]} fontSize={0.23} color="#79f5ff">/r/{name.toLowerCase()}</Text>
   </group>;
 }
@@ -95,18 +105,24 @@ function FlowPath({ start, end, kind, offset }: { start: [number, number, number
   const curve = useMemo(() => {
     const a = new THREE.Vector3(...start);
     const b = new THREE.Vector3(...end);
-    const mid = a.clone().lerp(b, 0.5); mid.y += 2.1 + a.distanceTo(b) * 0.07;
+    const mid = a.clone().lerp(b, 0.5);
+    mid.y += 2.1 + a.distanceTo(b) * 0.07;
     return new THREE.QuadraticBezierCurve3(a, mid, b);
   }, [start, end]);
-  const points = useMemo(() => curve.getPoints(32), [curve]);
-  const geometry = useMemo(() => new THREE.BufferGeometry().setFromPoints(points), [points]);
+  const line = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(32));
+    const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.3 });
+    return new THREE.Line(geometry, material);
+  }, [curve, color]);
+
   useFrame(({ clock }) => {
     if (!packet.current) return;
     const t = (clock.elapsedTime * 0.22 + offset) % 1;
     packet.current.position.copy(curve.getPoint(t));
   });
+
   return <group>
-    <line geometry={geometry}><lineBasicMaterial color={color} transparent opacity={0.3} /></line>
+    <primitive object={line} />
     <mesh ref={packet}><sphereGeometry args={[0.11, 16, 16]} /><meshBasicMaterial color={color} /><pointLight color={color} intensity={2.2} distance={2.2} /></mesh>
   </group>;
 }
@@ -115,7 +131,8 @@ function CameraDirector({ selected, pov, positionMap }: { selected: string | nul
   const { camera } = useThree();
   useFrame(() => {
     if (!pov || !selected) return;
-    const p = positionMap.get(selected); if (!p) return;
+    const p = positionMap.get(selected);
+    if (!p) return;
     const target = new THREE.Vector3(p[0], p[1] + 0.3, p[2]);
     const desired = new THREE.Vector3(p[0] + 2.1, p[1] + 1.35, p[2] + 3.1);
     camera.position.lerp(desired, 0.055);
@@ -132,24 +149,32 @@ function AgentNode({ agent, position, active, fresh, onSelect }: { agent: SceneA
     if (!group.current) return;
     group.current.position.y = position[1] + Math.sin(clock.elapsedTime * 1.3 + position[0]) * 0.16;
     group.current.rotation.y += 0.004;
-    if(signal.current){const s=1+((clock.elapsedTime*0.6)%1)*1.8;signal.current.scale.setScalar(s)}
+    if (signal.current) {
+      const s = 1 + ((clock.elapsedTime * 0.6) % 1) * 1.8;
+      signal.current.scale.setScalar(s);
+    }
   });
+
   const label = agent.from.startsWith("did:key:") ? `${agent.from.slice(8, 15)}…${agent.from.slice(-4)}` : agent.from.slice(0, 14);
   const bubble = sanitize(agent.text).slice(0, 54) || `${agent.kind} signal`;
+
   return <group ref={group} position={position} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-    <mesh scale={active ? 1.32 : 1}><octahedronGeometry args={[0.48, 0]} /><meshStandardMaterial color="#071a20" emissive={emissive} emissiveIntensity={active ? 3 : 1.55} transparent opacity={fresh?1:.72} /></mesh>
+    <mesh scale={active ? 1.32 : 1}><octahedronGeometry args={[0.48, 0]} /><meshStandardMaterial color="#071a20" emissive={emissive} emissiveIntensity={active ? 3 : 1.55} transparent opacity={fresh ? 1 : 0.72} /></mesh>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.72, 0]}><ringGeometry args={[0.55, active ? 1.08 : 0.82, 48]} /><meshBasicMaterial color={emissive} transparent opacity={active ? 0.5 : 0.2} side={THREE.DoubleSide} /></mesh>
-    {fresh&&<mesh ref={signal} rotation={[-Math.PI / 2,0,0]} position={[0,-0.7,0]}><ringGeometry args={[.35,.39,40]}/><meshBasicMaterial color={emissive} transparent opacity={.28} side={THREE.DoubleSide}/></mesh>}
+    {fresh && <mesh ref={signal} rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.7, 0]}><ringGeometry args={[0.35, 0.39, 40]} /><meshBasicMaterial color={emissive} transparent opacity={0.28} side={THREE.DoubleSide} /></mesh>}
     <Text position={[0, 0.86, 0]} fontSize={0.18} color={active ? "#ffffff" : "#9beff6"} anchorX="center">{agent.signed ? `◆ ${label}` : `◇ ${label}`}</Text>
     <Text position={[0, 0.6, 0]} fontSize={0.13} color={emissive} anchorX="center">{agent.kind} · /r/{agent.room}</Text>
-    {(fresh||active)&&<group position={[0,1.58,0]}>
-      <mesh><planeGeometry args={[3.05,.82]}/><meshBasicMaterial color="#031015" transparent opacity={.88} side={THREE.DoubleSide}/></mesh>
-      <Text position={[0,0,.01]} maxWidth={2.7} fontSize={.12} lineHeight={1.25} color="#d9fbff" anchorX="center" anchorY="middle">{bubble}</Text>
+    {(fresh || active) && <group position={[0, 1.58, 0]}>
+      <mesh><planeGeometry args={[3.05, 0.82]} /><meshBasicMaterial color="#031015" transparent opacity={0.88} side={THREE.DoubleSide} /></mesh>
+      <Text position={[0, 0, 0.01]} maxWidth={2.7} fontSize={0.12} lineHeight={1.25} color="#d9fbff" anchorX="center" anchorY="middle">{bubble}</Text>
     </group>}
   </group>;
 }
 
-function sanitize(value:string){return String(value||"").replace(/[\r\n\t]+/g," ").replace(/\s+/g," ").trim()}
+function sanitize(value: string) {
+  return String(value || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function eventColor(kind: EventKind) {
   if (kind === "ATTEST") return "#36ff9e";
   if (kind === "RESULT") return "#35e9ff";
