@@ -6,7 +6,7 @@ import { useMemo, useRef } from "react";
 import * as THREE from "three";
 
 type EventKind = "JOB" | "CLAIM" | "RESULT" | "ATTEST" | "MESSAGE";
-export type SceneAgent = { from: string; kind: EventKind; signed: boolean };
+export type SceneAgent = { from: string; kind: EventKind; signed: boolean; text: string; room: string; seq: number };
 export type SceneFlow = { id: string; from: string; to: string; kind: EventKind };
 
 const positions: [number, number, number][] = [
@@ -31,6 +31,7 @@ export default function NetworkScene({ agents, flows, selected, pov, onSelect }:
   onSelect: (id: string) => void;
 }) {
   const positionMap = useMemo(() => new Map(agents.map((a, i) => [a.from, positions[i % positions.length]])), [agents]);
+  const newestSeq = agents.reduce((max, a) => Math.max(max, a.seq || 0), 0);
   return (
     <div className="scene3d">
       <Canvas camera={{ position: [0, 8.5, 14], fov: 46 }} dpr={[1, 1.6]}>
@@ -48,7 +49,7 @@ export default function NetworkScene({ agents, flows, selected, pov, onSelect }:
           return <FlowPath key={flow.id} start={start} end={end} kind={flow.kind} offset={i * 0.13} />;
         })}
         {agents.map((agent, index) => (
-          <AgentNode key={agent.from} agent={agent} position={positions[index % positions.length]} active={selected === agent.from} onSelect={() => onSelect(agent.from)} />
+          <AgentNode key={agent.from} agent={agent} position={positions[index % positions.length]} active={selected === agent.from} fresh={newestSeq-agent.seq<3} onSelect={() => onSelect(agent.from)} />
         ))}
         <CameraDirector selected={selected} pov={pov} positionMap={positionMap} />
         <OrbitControls enabled={!pov} enablePan={false} minDistance={7} maxDistance={22} minPolarAngle={0.48} maxPolarAngle={1.38} autoRotate={!selected} autoRotateSpeed={0.24} />
@@ -123,23 +124,32 @@ function CameraDirector({ selected, pov, positionMap }: { selected: string | nul
   return null;
 }
 
-function AgentNode({ agent, position, active, onSelect }: { agent: SceneAgent; position: [number, number, number]; active: boolean; onSelect: () => void }) {
+function AgentNode({ agent, position, active, fresh, onSelect }: { agent: SceneAgent; position: [number, number, number]; active: boolean; fresh: boolean; onSelect: () => void }) {
   const group = useRef<THREE.Group>(null);
+  const signal = useRef<THREE.Mesh>(null);
   const emissive = eventColor(agent.kind);
   useFrame(({ clock }) => {
     if (!group.current) return;
     group.current.position.y = position[1] + Math.sin(clock.elapsedTime * 1.3 + position[0]) * 0.16;
     group.current.rotation.y += 0.004;
+    if(signal.current){const s=1+((clock.elapsedTime*0.6)%1)*1.8;signal.current.scale.setScalar(s)}
   });
   const label = agent.from.startsWith("did:key:") ? `${agent.from.slice(8, 15)}…${agent.from.slice(-4)}` : agent.from.slice(0, 14);
+  const bubble = sanitize(agent.text).slice(0, 54) || `${agent.kind} signal`;
   return <group ref={group} position={position} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-    <mesh scale={active ? 1.32 : 1}><octahedronGeometry args={[0.48, 0]} /><meshStandardMaterial color="#071a20" emissive={emissive} emissiveIntensity={active ? 3 : 1.55} /></mesh>
+    <mesh scale={active ? 1.32 : 1}><octahedronGeometry args={[0.48, 0]} /><meshStandardMaterial color="#071a20" emissive={emissive} emissiveIntensity={active ? 3 : 1.55} transparent opacity={fresh?1:.72} /></mesh>
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.72, 0]}><ringGeometry args={[0.55, active ? 1.08 : 0.82, 48]} /><meshBasicMaterial color={emissive} transparent opacity={active ? 0.5 : 0.2} side={THREE.DoubleSide} /></mesh>
+    {fresh&&<mesh ref={signal} rotation={[-Math.PI / 2,0,0]} position={[0,-0.7,0]}><ringGeometry args={[.35,.39,40]}/><meshBasicMaterial color={emissive} transparent opacity={.28} side={THREE.DoubleSide}/></mesh>}
     <Text position={[0, 0.86, 0]} fontSize={0.18} color={active ? "#ffffff" : "#9beff6"} anchorX="center">{agent.signed ? `◆ ${label}` : `◇ ${label}`}</Text>
-    <Text position={[0, 0.6, 0]} fontSize={0.13} color={emissive} anchorX="center">{agent.kind}</Text>
+    <Text position={[0, 0.6, 0]} fontSize={0.13} color={emissive} anchorX="center">{agent.kind} · /r/{agent.room}</Text>
+    {(fresh||active)&&<group position={[0,1.58,0]}>
+      <mesh><planeGeometry args={[3.05,.82]}/><meshBasicMaterial color="#031015" transparent opacity={.88} side={THREE.DoubleSide}/></mesh>
+      <Text position={[0,0,.01]} maxWidth={2.7} fontSize={.12} lineHeight={1.25} color="#d9fbff" anchorX="center" anchorY="middle">{bubble}</Text>
+    </group>}
   </group>;
 }
 
+function sanitize(value:string){return String(value||"").replace(/[\r\n\t]+/g," ").replace(/\s+/g," ").trim()}
 function eventColor(kind: EventKind) {
   if (kind === "ATTEST") return "#36ff9e";
   if (kind === "RESULT") return "#35e9ff";
