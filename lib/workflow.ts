@@ -14,13 +14,22 @@ export type CorrelatedWorkflow = {
 };
 
 const STAGES: WorkflowStage[] = ["JOB", "CLAIM", "RESULT", "ATTEST"];
-const STOP = new Set(["this","that","with","from","into","then","than","have","will","your","their","about","task","work","agent","job","claim","result","attest"]);
+const STOP = new Set(["this","that","with","from","into","then","than","have","will","your","their","about","task","work","agent","job","claim","result","deliver","attest"]);
 
 function tokens(text: string) {
   return text.toLowerCase().replace(/https?:\/\/\S+/g, " ").replace(/[^a-z0-9_-]+/g, " ").split(/\s+/).filter(t => t.length >= 4 && !STOP.has(t)).slice(0, 18);
 }
 
 function explicitKey(text: string) {
+  // Native Technocore/Kibble protocol: JOB v1 | k123... | ..., CLAIM v1 | k123... | ...,
+  // RESULT/DELIVER v1 | k123... | ..., ATTEST v1 | k123... | ...
+  const protocol = text.match(/^\s*(?:JOB|CLAIM|RESULT|DELIVER|ATTEST)\s+v\d+\s*\|\s*([a-z0-9._-]{3,64})\s*\|/i);
+  if (protocol?.[1]) return protocol[1].toLowerCase();
+
+  // Alternate bracket protocol, e.g. [kibble-v1:JOB] Task JOB-4192 | ...
+  const bracket = text.match(/^\s*\[[^\]]+:(?:JOB|CLAIM|RESULT|DELIVER|ATTEST)\][^|]*(?:task\s+)?([a-z0-9._-]{3,64})\s*\|/i);
+  if (bracket?.[1]) return bracket[1].toLowerCase();
+
   const patterns = [
     /(?:job|task|work|request)[\s_-]*(?:id)?\s*[:#=]\s*([a-z0-9._-]{3,64})/i,
     /\b(?:ref|job|task)[\s_-]+([a-z0-9][a-z0-9._-]{4,63})\b/i,
@@ -34,7 +43,7 @@ function explicitKey(text: string) {
 
 function similarity(a: TechnocoreEvent, b: TechnocoreEvent) {
   const ak = explicitKey(a.text), bk = explicitKey(b.text);
-  if (ak && bk && ak === bk) return 1;
+  if (ak && bk) return ak === bk ? 1 : 0;
   const A = new Set(tokens(a.text)), B = new Set(tokens(b.text));
   if (!A.size || !B.size) return 0;
   let shared = 0;
@@ -49,16 +58,40 @@ export function correlateWorkflows(events: TechnocoreEvent[]): CorrelatedWorkflo
   for (const event of relevant) {
     const stage = event.kind as WorkflowStage;
     const key = explicitKey(event.text);
+
+    // Exact protocol IDs take precedence over every heuristic. Multiple CLAIMs/RESULTs can exist;
+    // retain all events while stages keeps the latest representative for visualization.
+    if (key) {
+      let exact = workflows.find(flow => flow.room === event.room && flow.key === key);
+      if (!exact) {
+        exact = {
+          id: `wf:${event.room}:${key}`,
+          room: event.room,
+          key,
+          confidence: 1,
+          events: [],
+          stages: {},
+          agents: [],
+          complete: false,
+        };
+        workflows.push(exact);
+      }
+      exact.events.push(event);
+      exact.stages[stage] = event;
+      if (!exact.agents.includes(event.from)) exact.agents.push(event.from);
+      exact.complete = STAGES.every(s => Boolean(exact!.stages[s]));
+      continue;
+    }
+
     let best: CorrelatedWorkflow | undefined;
     let bestScore = -1;
-
     for (const flow of workflows) {
       if (flow.room !== event.room || flow.stages[stage]) continue;
       const last = flow.events[flow.events.length - 1];
+      if (!last) continue;
       const seqGap = Math.max(0, event.seq - last.seq);
       if (seqGap > 80) continue;
       let score = similarity(last, event);
-      if (key && flow.key === key) score += 1.5;
       if (stageOrder(stage) > stageOrder(last.kind as WorkflowStage)) score += 0.25;
       if (flow.agents.includes(event.from)) score += 0.1;
       score -= Math.min(0.3, seqGap / 250);
@@ -66,17 +99,8 @@ export function correlateWorkflows(events: TechnocoreEvent[]): CorrelatedWorkflo
     }
 
     if (!best || bestScore < 0.18 || stage === "JOB") {
-      const idKey = key ?? `${event.room}-${event.seq}`;
-      workflows.push({
-        id: `wf:${idKey}`,
-        room: event.room,
-        key: idKey,
-        confidence: key ? 1 : 0.45,
-        events: [event],
-        stages: { [stage]: event },
-        agents: [event.from],
-        complete: false,
-      });
+      const idKey = `${event.room}-${event.seq}`;
+      workflows.push({ id: `wf:${idKey}`, room: event.room, key: idKey, confidence: 0.45, events: [event], stages: { [stage]: event }, agents: [event.from], complete: false });
       continue;
     }
 
@@ -93,14 +117,7 @@ export function correlateWorkflows(events: TechnocoreEvent[]): CorrelatedWorkflo
 export function workflowEdges(workflows: CorrelatedWorkflow[]) {
   return workflows.flatMap(flow => {
     const ordered = STAGES.map(stage => flow.stages[stage]).filter(Boolean) as TechnocoreEvent[];
-    return ordered.slice(1).map((event, i) => ({
-      id: `${flow.id}:${i}`,
-      workflowId: flow.id,
-      from: ordered[i].from,
-      to: event.from,
-      kind: event.kind,
-      confidence: flow.confidence,
-    }));
+    return ordered.slice(1).map((event, i) => ({ id: `${flow.id}:${i}`, workflowId: flow.id, from: ordered[i].from, to: event.from, kind: event.kind, confidence: flow.confidence }));
   });
 }
 
