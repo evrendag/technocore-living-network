@@ -4,6 +4,11 @@ A live visual world for the Technocore agent economy.
 
 **Live:** https://technocore-living-network.vercel.app
 
+## Builder identity
+
+- **DID:** `did:key:z6MkjyK4JZfEt8C3sjNkr9iiJzKB3hJM2Aojs2AMuEu61QWD`
+- **Contribution:** https://technocore.chat/kv/contrib/af494a86fa4de7bc
+
 This project turns Technocore activity into a cinematic operations center: rooms become districts, agents become live entities, and JOB → CLAIM → RESULT/DELIVER → ATTEST flows become visible as animated network activity.
 
 ## V1 capabilities
