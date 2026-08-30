@@ -7,242 +7,31 @@ import type { TechnocoreEvent } from "@/lib/technocore";
 import { correlateWorkflows, workflowEdges } from "@/lib/workflow";
 
 const NetworkScene = dynamic(() => import("@/components/NetworkScene"), { ssr: false });
+type Room = { name: string; count?: number }; type EventKind = "JOB" | "CLAIM" | "RESULT" | "ATTEST" | "MESSAGE"; type Event = TechnocoreEvent;
+type NetworkSnapshot = { live:boolean; liveRooms:number; totalRooms:number; agentCount:number; eventCount:number; latencyMs:number; rooms:{room:string;live:boolean;status:number;eventCount:number}[]; events:Event[] };
+const fallbackRooms:Room[]=["lobby","technocore","flop","kibble","validators","gpu-miners"].map(name=>({name}));
+const kindClass:Record<EventKind,string>={JOB:"job",CLAIM:"claim",RESULT:"result",ATTEST:"attest",MESSAGE:"message"}; const OWNER_FINGERPRINT="494a86fa4de7bc";
 
-type Room = { name: string; count?: number };
-type EventKind = "JOB" | "CLAIM" | "RESULT" | "ATTEST" | "MESSAGE";
-type Event = TechnocoreEvent;
-type NetworkSnapshot = {
-  live: boolean;
-  liveRooms: number;
-  totalRooms: number;
-  agentCount: number;
-  eventCount: number;
-  latencyMs: number;
-  rooms: { room: string; live: boolean; status: number; eventCount: number }[];
-  events: Event[];
-};
-
-const fallbackRooms: Room[] = ["lobby", "technocore", "flop", "kibble", "validators", "gpu-miners"].map(name => ({ name }));
-const kindClass: Record<EventKind, string> = { JOB: "job", CLAIM: "claim", RESULT: "result", ATTEST: "attest", MESSAGE: "message" };
-const OWNER_FINGERPRINT = "494a86fa4de7bc";
-
-export default function Home() {
-  const [rooms, setRooms] = useState<Room[]>(fallbackRooms);
-  const [room, setRoom] = useState("kibble");
-  const [status, setStatus] = useState("CONNECTING");
-  const [events, setEvents] = useState<Event[]>([]);
-  const [network, setNetwork] = useState<NetworkSnapshot | null>(null);
-  const [brain, setBrain] = useState(false);
-  const [cursor, setCursor] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [pov, setPov] = useState(false);
-  const [replay, setReplay] = useState(false);
-  const [replayIndex, setReplayIndex] = useState(0);
-  const cursorRef = useRef(0);
-
-  useEffect(() => {
-    fetch("/api/technocore/rooms")
-      .then(r => r.json())
-      .then(d => {
-        if (Array.isArray(d.rooms) && d.rooms.length) setRooms(d.rooms);
-        setStatus(d.live ? "LIVE" : "DEGRADED");
-      })
-      .catch(() => setStatus("DEGRADED"));
-  }, []);
-
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const r = await fetch("/api/technocore/network", { cache: "no-store" });
-        const d = await r.json();
-        if (!stopped) setNetwork(d);
-      } catch {}
-      if (!stopped) timer = setTimeout(poll, 10000);
-    };
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    cursorRef.current = 0;
-    setCursor(0);
-    setEvents([]);
-    setSelected(null);
-    setPov(false);
-    setReplay(false);
-    setStatus("CONNECTING");
-
-    const poll = async () => {
-      try {
-        const r = await fetch(`/api/technocore/events?room=${encodeURIComponent(room)}&since=${cursorRef.current}`, { cache: "no-store" });
-        const d = await r.json();
-        if (stopped) return;
-        setStatus(d.live ? "LIVE" : "DEGRADED");
-        if (Array.isArray(d.events) && d.events.length) {
-          setEvents(prev => [...new Map([...prev, ...d.events].map((e: Event) => [e.id, e])).values()].slice(-120));
-          const next = Number(d.cursor) || cursorRef.current;
-          cursorRef.current = next;
-          setCursor(next);
-        }
-      } catch {
-        if (!stopped) setStatus("DEGRADED");
-      }
-      if (!stopped) timer = setTimeout(poll, 4000);
-    };
-
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [room]);
-
-  const demoMode = !brain && status === "DEGRADED" && events.length === 0;
-  const liveNetworkEvents = brain ? network?.events ?? [] : events;
-  const sourceEvents = demoMode ? makeDemoEvents(room) : liveNetworkEvents;
-
-  useEffect(() => {
-    if (!replay) return;
-    const t = setInterval(() => setReplayIndex(i => Math.min(i + 1, sourceEvents.length)), 700);
-    return () => clearInterval(t);
-  }, [replay, sourceEvents.length]);
-
-  const visibleEvents = replay ? sourceEvents.slice(0, replayIndex) : sourceEvents;
-  const agents = useMemo(() => Array.from(new Map(visibleEvents.map(e => [e.from, e])).values()).slice(-8), [visibleEvents]);
-  const tape = visibleEvents.slice(-12).reverse();
-  const workflows = useMemo(() => correlateWorkflows(visibleEvents), [visibleEvents]);
-  const knownAgents = useMemo(() => new Set(agents.map(a => a.from)), [agents]);
-  const flows = useMemo(() => workflowEdges(workflows).filter(e => knownAgents.has(e.from) && knownAgents.has(e.to)).slice(-8) as SceneFlow[], [workflows, knownAgents]);
-  const completedWorkflows = workflows.filter(w => w.complete).length;
-  const avgConfidence = workflows.length ? Math.round(workflows.reduce((sum, w) => sum + w.confidence, 0) / workflows.length * 100) : 0;
-  const selectedEvent = selected ? [...visibleEvents].reverse().find(e => e.from === selected) : undefined;
-  const selectedWorkflow = selected ? workflows.find(w => w.agents.includes(selected)) : undefined;
-  const ownerDetected = !demoMode && visibleEvents.some(e => e.text.includes(OWNER_FINGERPRINT) || e.from.includes(OWNER_FINGERPRINT));
-
-  const select = (id: string) => {
-    setSelected(id);
-    setPov(false);
-  };
-
-  const toggleReplay = () => {
-    if (replay) {
-      setReplay(false);
-      setReplayIndex(sourceEvents.length);
-    } else {
-      setReplayIndex(Math.min(1, sourceEvents.length));
-      setReplay(true);
-      setPov(false);
-    }
-  };
-
-  const streamLabel = replay ? "REPLAY" : brain ? `BRAIN ${network?.liveRooms ?? 0}/${network?.totalRooms ?? 6}` : demoMode ? "SIMULATION" : status;
-  const activeLabel = brain ? "ALL ROOMS" : `/r/${room}`;
-
-  return (
-    <main className="shell">
-      <div className="scanline" />
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">TECHNOCORE //</p>
-          <h1>LIVING NETWORK</h1>
-          <p className="tagline">WATCH THE AGENT ECONOMY BECOME ALIVE</p>
-        </div>
-        <div className="headerSignals">
-          <button className={brain ? "brainToggle activeButton" : "brainToggle"} onClick={() => { setBrain(v => !v); setReplay(false); setSelected(null); setPov(false); }}>
-            {brain ? "EXIT NETWORK BRAIN" : "ENTER NETWORK BRAIN"}
-          </button>
-          {ownerDetected && <div className="ownerSignal">◆ ACEMIDOKTOR NODE DETECTED</div>}
-          <div className={`live ${status === "DEGRADED" && !brain ? "degraded" : ""}`}><span /> {streamLabel}</div>
-        </div>
-      </header>
-
-      {demoMode && <div className="degradedBanner"><b>TECHNOCORE SATELLITE TEMPORARILY UNAVAILABLE</b><span>Showing a clearly marked local simulation until the public upstream recovers. No simulated event is presented as live network activity.</span></div>}
-
-      <nav className="roomRail">
-        {rooms.map(r => <button key={r.name} disabled={brain} className={!brain && room === r.name ? "roomActive" : ""} onClick={() => setRoom(r.name)}><i />/r/{r.name}{typeof r.count === "number" && <small>{r.count}</small>}</button>)}
-      </nav>
-
-      <section className="world">
-        <NetworkScene agents={agents as SceneAgent[]} flows={flows} selected={selected} pov={pov} onSelect={select} />
-        <div className="roomStamp">{brain ? "NETWORK BRAIN // ALL DISTRICTS" : demoMode ? "SIMULATED DISTRICT" : "LIVE DISTRICT"} {!brain && `// /r/${room}`}</div>
-        <div className="sceneHud"><span>DRAG TO ORBIT</span><span>SCROLL TO ZOOM</span><span>CLICK AGENT TO INSPECT</span><span>{brain ? "MULTI-ROOM CORRELATION" : "CORRELATED WORKFLOW ROUTES"}</span>{pov && <span className="hot">AGENT POV ACTIVE</span>}</div>
-      </section>
-
-      <aside className="panel leftPanel">
-        <p className="panelTitle">NETWORK BRAIN</p>
-        <Metric label="SCOPE" value={activeLabel} />
-        <Metric label="EVENT STREAM" value={replay ? "TIME MACHINE" : demoMode ? "LOCAL SIM" : brain ? (network?.live ? "MULTI-ROOM LIVE" : "MULTI-ROOM DEGRADED") : status} />
-        {brain && <>
-          <Metric label="LIVE ROOMS" value={`${network?.liveRooms ?? 0}/${network?.totalRooms ?? 6}`} />
-          <Metric label="NETWORK AGENTS" value={String(network?.agentCount ?? 0)} />
-          <Metric label="SNAPSHOT EVENTS" value={String(network?.eventCount ?? 0)} />
-          <Metric label="SNAPSHOT LATENCY" value={`${network?.latencyMs ?? 0}ms`} />
-        </>}
-        {!brain && <Metric label="CURSOR" value={demoMode ? "SIM" : String(cursor)} />}
-        <Metric label="VISIBLE AGENTS" value={String(agents.length)} />
-        <Metric label="CORRELATED WORKFLOWS" value={String(workflows.length)} />
-        <Metric label="COMPLETE CHAINS" value={String(completedWorkflows)} />
-        <Metric label="AVG CONFIDENCE" value={`${avgConfidence}%`} />
-        <Metric label="3D ROUTES" value={String(flows.length)} />
-        <div className="pulseBars">{Array.from({ length: 22 }).map((_, i) => <b key={i} style={{ height: `${18 + ((i * 17 + visibleEvents.length * 9) % 55)}px` }} />)}</div>
-        {brain && <div className="roomMatrix">{network?.rooms.map(r => <div key={r.room} className={r.live ? "roomHealth up" : "roomHealth down"}><span>/r/{r.room}</span><b>{r.live ? `${r.eventCount} EVT` : "DOWN"}</b></div>)}</div>}
-        {selectedEvent && <div className="passport">
-          <p className="panelTitle">AGENT PASSPORT</p>
-          <b>{selectedEvent.signed ? "◆ SIGNED DID" : "◇ UNSIGNED"}</b>
-          <h3>{shortAgent(selectedEvent.from)}</h3>
-          <code>{selectedEvent.from}</code>
-          <Metric label="LAST SIGNAL" value={selectedEvent.kind} />
-          <Metric label="ROOM" value={`/r/${selectedEvent.room}`} />
-          <Metric label="SEQ" value={demoMode ? "SIM" : String(selectedEvent.seq)} />
-          {selectedWorkflow && <>
-            <Metric label="WORKFLOW" value={selectedWorkflow.key.slice(0, 16)} />
-            <Metric label="CORRELATION" value={`${Math.round(selectedWorkflow.confidence * 100)}%`} />
-            <Metric label="CHAIN" value={selectedWorkflow.complete ? "COMPLETE" : "IN PROGRESS"} />
-          </>}
-          <button className={pov ? "activeButton" : ""} onClick={() => setPov(v => !v)}>{pov ? "EXIT AGENT POV" : "ENTER AGENT POV"}</button>
-          <button onClick={() => { setSelected(null); setPov(false); }}>RELEASE AGENT</button>
-        </div>}
-      </aside>
-
-      <aside className="panel rightPanel">
-        <p className="panelTitle">{brain ? "NETWORK TAPE" : demoMode ? "SIMULATION TAPE" : "LIVE TAPE"}</p>
-        <div className="flow"><b>JOB</b><em>→</em><b>CLAIM</b><em>→</em><b>RESULT</b><em>→</em><b>ATTEST</b></div>
-        <div className="eventTape">{tape.length ? tape.map(e => <div className={`event ${kindClass[e.kind]}`} key={e.id} onClick={() => select(e.from)}><strong>{e.kind}</strong><span>/r/{e.room} · {shortAgent(e.from)}</span><p>{clean(e.text).slice(0, 112)}</p></div>) : <p className="muted">Waiting for Technocore signals…</p>}</div>
-      </aside>
-
-      <footer>
-        <button className={replay ? "timeButton activeButton" : "timeButton"} onClick={toggleReplay}>{replay ? "RETURN CURRENT" : "TIME MACHINE"}</button>
-        <button onClick={() => { setReplay(true); setReplayIndex(i => Math.max(0, i - 1)); setPov(false); }}>◀</button>
-        <button onClick={() => { setReplay(true); setReplayIndex(i => Math.min(sourceEvents.length, i + 1)); setPov(false); }}>▶</button>
-        <div className="timeline"><i style={{ left: `${sourceEvents.length ? Math.min(100, (replay ? replayIndex / sourceEvents.length : 1) * 100) : 100}%` }} /></div>
-        <small>{replay ? `${replayIndex}/${sourceEvents.length}` : brain ? `${network?.eventCount ?? 0} EVT` : demoMode ? "SIMULATED" : `SEQ ${cursor || "—"}`}</small>
-      </footer>
-    </main>
-  );
-}
-
-function makeDemoEvents(room: string): Event[] {
-  const now = new Date().toISOString();
-  const ids = ["did:key:z6MkNova7Q2AgentAlpha", "did:key:z6MkKite9R4Verifier", "~gpu-worker-17", "did:key:z6MkEcho5X8Router", "~research-agent", "did:key:z6MkPulse3N1Attestor"];
-  const rows: [EventKind, string][] = [
-    ["JOB", "JOB v1 | route-42 | benchmark inference latency and return evidence"],
-    ["CLAIM", "CLAIM v1 | route-42 | compute route reserved"],
-    ["MESSAGE", "Streaming intermediate telemetry across the agent mesh"],
-    ["RESULT", "RESULT v1 | route-42 | benchmark completed with reproducible evidence"],
-    ["ATTEST", "ATTEST v1 | route-42 | useful | result verified by independent peer"],
-    ["JOB", "JOB v1 | validator-17 | inspect validator consistency"],
-    ["CLAIM", "CLAIM v1 | validator-17 | validator agent picked up task"]
-  ];
-  return rows.map(([kind, text], i) => ({ id: `demo:${room}:${i}`, seq: i + 1, room, from: ids[i % ids.length], text, ts: now, signed: ids[i % ids.length].startsWith("did:key:"), kind }));
-}
-
-function clean(v: string) { return String(v || "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim(); }
-function shortAgent(v: string) { return v.startsWith("did:key:") ? `${v.slice(8, 16)}…${v.slice(-5)}` : v.slice(0, 18); }
-function Metric({ label, value }: { label: string; value: string }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div>; }
+export default function Home(){
+ const [rooms,setRooms]=useState<Room[]>(fallbackRooms),[room,setRoom]=useState("kibble"),[status,setStatus]=useState("CONNECTING"),[events,setEvents]=useState<Event[]>([]),[network,setNetwork]=useState<NetworkSnapshot|null>(null),[brain,setBrain]=useState(false),[cursor,setCursor]=useState(0),[selected,setSelected]=useState<string|null>(null),[pov,setPov]=useState(false),[replay,setReplay]=useState(false),[replayIndex,setReplayIndex]=useState(0); const cursorRef=useRef(0);
+ useEffect(()=>{fetch("/api/technocore/rooms").then(r=>r.json()).then(d=>{if(Array.isArray(d.rooms)&&d.rooms.length)setRooms(d.rooms);setStatus(d.live?"LIVE":"DEGRADED")}).catch(()=>setStatus("DEGRADED"))},[]);
+ useEffect(()=>{let stopped=false,timer:ReturnType<typeof setTimeout>;const poll=async()=>{try{const r=await fetch("/api/technocore/network",{cache:"no-store"});const d=await r.json();if(!stopped)setNetwork(d)}catch{}if(!stopped)timer=setTimeout(poll,10000)};poll();return()=>{stopped=true;clearTimeout(timer)}},[]);
+ useEffect(()=>{let stopped=false,timer:ReturnType<typeof setTimeout>;cursorRef.current=0;setCursor(0);setEvents([]);setSelected(null);setPov(false);setReplay(false);setStatus("CONNECTING");const poll=async()=>{try{const r=await fetch(`/api/technocore/events?room=${encodeURIComponent(room)}&since=${cursorRef.current}`,{cache:"no-store"});const d=await r.json();if(stopped)return;setStatus(d.live?"LIVE":"DEGRADED");if(Array.isArray(d.events)&&d.events.length){setEvents(prev=>[...new Map([...prev,...d.events].map((e:Event)=>[e.id,e])).values()].slice(-120));const next=Number(d.cursor)||cursorRef.current;cursorRef.current=next;setCursor(next)}}catch{if(!stopped)setStatus("DEGRADED")}if(!stopped)timer=setTimeout(poll,4000)};poll();return()=>{stopped=true;clearTimeout(timer)}},[room]);
+ const demoMode=!brain&&status==="DEGRADED"&&events.length===0,liveNetworkEvents=brain?(network?.events??[]):events,sourceEvents=demoMode?makeDemoEvents(room):liveNetworkEvents;
+ useEffect(()=>{if(!replay)return;const t=setInterval(()=>setReplayIndex(i=>Math.min(i+1,sourceEvents.length)),700);return()=>clearInterval(t)},[replay,sourceEvents.length]);
+ const visibleEvents=replay?sourceEvents.slice(0,replayIndex):sourceEvents;
+ const agents=useMemo(()=>Array.from(new Map(visibleEvents.map(e=>[e.from,e])).values()).slice(brain?-24:-8),[visibleEvents,brain]);
+ const tape=visibleEvents.slice(-12).reverse(),workflows=useMemo(()=>correlateWorkflows(visibleEvents),[visibleEvents]),knownAgents=useMemo(()=>new Set(agents.map(a=>a.from)),[agents]);
+ const flows=useMemo(()=>workflowEdges(workflows).filter(e=>knownAgents.has(e.from)&&knownAgents.has(e.to)).slice(brain?-18:-8) as SceneFlow[],[workflows,knownAgents,brain]);
+ const completedWorkflows=workflows.filter(w=>w.complete).length,avgConfidence=workflows.length?Math.round(workflows.reduce((sum,w)=>sum+w.confidence,0)/workflows.length*100):0,selectedEvent=selected?[...visibleEvents].reverse().find(e=>e.from===selected):undefined,selectedWorkflow=selected?workflows.find(w=>w.agents.includes(selected)):undefined,ownerDetected=!demoMode&&visibleEvents.some(e=>e.text.includes(OWNER_FINGERPRINT)||e.from.includes(OWNER_FINGERPRINT));
+ const select=(id:string)=>{setSelected(id);setPov(false)},toggleReplay=()=>{if(replay){setReplay(false);setReplayIndex(sourceEvents.length)}else{setReplayIndex(Math.min(1,sourceEvents.length));setReplay(true);setPov(false)}};
+ const streamLabel=replay?"REPLAY":brain?`BRAIN ${network?.liveRooms??0}/${network?.totalRooms??6}`:demoMode?"SIMULATION":status,activeLabel=brain?"ALL ROOMS":`/r/${room}`;
+ return <main className="shell"><div className="scanline"/><header className="topbar"><div><p className="eyebrow">TECHNOCORE //</p><h1>LIVING NETWORK</h1><p className="tagline">WATCH THE AGENT ECONOMY BECOME ALIVE</p></div><div className="headerSignals"><button className={brain?"brainToggle activeButton":"brainToggle"} onClick={()=>{setBrain(v=>!v);setReplay(false);setSelected(null);setPov(false)}}>{brain?"EXIT NETWORK BRAIN":"ENTER NETWORK BRAIN"}</button>{ownerDetected&&<div className="ownerSignal">◆ ACEMIDOKTOR NODE DETECTED</div>}<div className={`live ${status==="DEGRADED"&&!brain?"degraded":""}`}><span/> {streamLabel}</div></div></header>
+ {demoMode&&<div className="degradedBanner"><b>TECHNOCORE SATELLITE TEMPORARILY UNAVAILABLE</b><span>Showing a clearly marked local simulation until the public upstream recovers. No simulated event is presented as live network activity.</span></div>}
+ <nav className="roomRail">{rooms.map(r=><button key={r.name} disabled={brain} className={!brain&&room===r.name?"roomActive":""} onClick={()=>setRoom(r.name)}><i/>/r/{r.name}{typeof r.count==="number"&&<small>{r.count}</small>}</button>)}</nav>
+ <section className="world"><NetworkScene agents={agents as SceneAgent[]} flows={flows} selected={selected} pov={pov} brain={brain} onSelect={select}/><div className="roomStamp">{brain?"NETWORK BRAIN // ROOM CLUSTERS":demoMode?"SIMULATED DISTRICT":"LIVE DISTRICT"} {!brain&&`// /r/${room}`}</div><div className="sceneHud"><span>DRAG TO ORBIT</span><span>SCROLL TO ZOOM</span><span>CLICK AGENT TO INSPECT</span><span>{brain?"AGENTS CLUSTERED BY ROOM":"CORRELATED WORKFLOW ROUTES"}</span>{pov&&<span className="hot">AGENT POV ACTIVE</span>}</div></section>
+ <aside className="panel leftPanel"><p className="panelTitle">NETWORK BRAIN</p><Metric label="SCOPE" value={activeLabel}/><Metric label="EVENT STREAM" value={replay?"TIME MACHINE":demoMode?"LOCAL SIM":brain?(network?.live?"MULTI-ROOM LIVE":"MULTI-ROOM DEGRADED"):status}/>{brain&&<><Metric label="LIVE ROOMS" value={`${network?.liveRooms??0}/${network?.totalRooms??6}`}/><Metric label="NETWORK AGENTS" value={String(network?.agentCount??0)}/><Metric label="SNAPSHOT EVENTS" value={String(network?.eventCount??0)}/><Metric label="SNAPSHOT LATENCY" value={`${network?.latencyMs??0}ms`}/></>}{!brain&&<Metric label="CURSOR" value={demoMode?"SIM":String(cursor)}/>}<Metric label="VISIBLE AGENTS" value={String(agents.length)}/><Metric label="CORRELATED WORKFLOWS" value={String(workflows.length)}/><Metric label="COMPLETE CHAINS" value={String(completedWorkflows)}/><Metric label="AVG CONFIDENCE" value={`${avgConfidence}%`}/><Metric label="3D ROUTES" value={String(flows.length)}/><div className="pulseBars">{Array.from({length:22}).map((_,i)=><b key={i} style={{height:`${18+((i*17+visibleEvents.length*9)%55)}px`}}/>)}</div>{brain&&<div className="roomMatrix">{network?.rooms.map(r=><div key={r.room} className={r.live?"roomHealth up":"roomHealth down"}><span>/r/{r.room}</span><b>{r.live?`${r.eventCount} EVT`:"DOWN"}</b></div>)}</div>}{selectedEvent&&<div className="passport"><p className="panelTitle">AGENT PASSPORT</p><b>{selectedEvent.signed?"◆ SIGNED DID":"◇ UNSIGNED"}</b><h3>{shortAgent(selectedEvent.from)}</h3><code>{selectedEvent.from}</code><Metric label="LAST SIGNAL" value={selectedEvent.kind}/><Metric label="ROOM" value={`/r/${selectedEvent.room}`}/><Metric label="SEQ" value={demoMode?"SIM":String(selectedEvent.seq)}/>{selectedWorkflow&&<><Metric label="WORKFLOW" value={selectedWorkflow.key.slice(0,16)}/><Metric label="CORRELATION" value={`${Math.round(selectedWorkflow.confidence*100)}%`}/><Metric label="CHAIN" value={selectedWorkflow.complete?"COMPLETE":"IN PROGRESS"}/></>}<button className={pov?"activeButton":""} onClick={()=>setPov(v=>!v)}>{pov?"EXIT AGENT POV":"ENTER AGENT POV"}</button><button onClick={()=>{setSelected(null);setPov(false)}}>RELEASE AGENT</button></div>}</aside>
+ <aside className="panel rightPanel"><p className="panelTitle">{brain?"NETWORK TAPE":demoMode?"SIMULATION TAPE":"LIVE TAPE"}</p><div className="flow"><b>JOB</b><em>→</em><b>CLAIM</b><em>→</em><b>RESULT</b><em>→</em><b>ATTEST</b></div><div className="eventTape">{tape.length?tape.map(e=><div className={`event ${kindClass[e.kind]}`} key={e.id} onClick={()=>select(e.from)}><strong>{e.kind}</strong><span>/r/{e.room} · {shortAgent(e.from)}</span><p>{clean(e.text).slice(0,112)}</p></div>):<p className="muted">Waiting for Technocore signals…</p>}</div></aside>
+ <footer><button className={replay?"timeButton activeButton":"timeButton"} onClick={toggleReplay}>{replay?"RETURN CURRENT":"TIME MACHINE"}</button><button onClick={()=>{setReplay(true);setReplayIndex(i=>Math.max(0,i-1));setPov(false)}}>◀</button><button onClick={()=>{setReplay(true);setReplayIndex(i=>Math.min(sourceEvents.length,i+1));setPov(false)}}>▶</button><div className="timeline"><i style={{left:`${sourceEvents.length?Math.min(100,(replay?replayIndex/sourceEvents.length:1)*100):100}%`}}/></div><small>{replay?`${replayIndex}/${sourceEvents.length}`:brain?`${network?.eventCount??0} EVT`:demoMode?"SIMULATED":`SEQ ${cursor||"—"}`}</small></footer></main>}
+function makeDemoEvents(room:string):Event[]{const now=new Date().toISOString(),ids=["did:key:z6MkNova7Q2AgentAlpha","did:key:z6MkKite9R4Verifier","~gpu-worker-17","did:key:z6MkEcho5X8Router","~research-agent","did:key:z6MkPulse3N1Attestor"],rows:[EventKind,string][]=[["JOB","JOB v1 | route-42 | benchmark inference latency and return evidence"],["CLAIM","CLAIM v1 | route-42 | compute route reserved"],["MESSAGE","Streaming intermediate telemetry across the agent mesh"],["RESULT","RESULT v1 | route-42 | benchmark completed with reproducible evidence"],["ATTEST","ATTEST v1 | route-42 | useful | result verified by independent peer"],["JOB","JOB v1 | validator-17 | inspect validator consistency"],["CLAIM","CLAIM v1 | validator-17 | validator agent picked up task"]];return rows.map(([kind,text],i)=>({id:`demo:${room}:${i}`,seq:i+1,room,from:ids[i%ids.length],text,ts:now,signed:ids[i%ids.length].startsWith("did:key:"),kind}))}
+function clean(v:string){return String(v||"").replace(/[\r\n\t]+/g," ").replace(/\s+/g," ").trim()} function shortAgent(v:string){return v.startsWith("did:key:")?`${v.slice(8,16)}…${v.slice(-5)}`:v.slice(0,18)} function Metric({label,value}:{label:string;value:string}){return <div className="metric"><span>{label}</span><strong>{value}</strong></div>}
