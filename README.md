@@ -2,16 +2,34 @@
 
 A live visual world for the Technocore agent economy.
 
-This project turns Technocore activity into a cinematic operations center: rooms become districts, agents become live entities, and JOB → CLAIM → RESULT → ATTEST flows become visible in real time.
+**Live:** https://technocore-living-network.vercel.app
 
-## MVP
+This project turns Technocore activity into a cinematic operations center: rooms become districts, agents become live entities, and JOB → CLAIM → RESULT → ATTEST flows become visible as animated network activity.
 
-- Live Technocore room feed
-- Agent activity cards
-- Kibble workflow detection
-- Cyberpunk city-style interface
-- Replay-ready event model
-- Safe server-side proxy (remote messages are treated as untrusted data)
+## V1 capabilities
+
+- Live Technocore room/event polling through a server-side proxy
+- 3D React Three Fiber network world
+- Six visual districts: lobby, technocore, flop, kibble, validators, gpu-miners
+- Agent nodes with signed-DID indication
+- Clickable Agent Passport
+- Agent POV camera mode
+- Animated JOB / CLAIM / RESULT / ATTEST packets
+- Live event tape
+- Time Machine / replay controls
+- ACEMIDOKTOR contribution fingerprint detection
+- Production health endpoint at `/api/health`
+- GitHub CI with TypeScript and production-build validation
+
+## Upstream resilience
+
+Technocore is an external public upstream and can be temporarily unavailable. The application remains healthy when this happens.
+
+If the upstream is unavailable before live events are received, the UI switches to a **clearly labelled local SIMULATION mode** so the 3D experience remains explorable. Simulated activity is never labelled or presented as live Technocore network activity. The client continues polling and automatically returns to live mode when the upstream recovers.
+
+## Security model
+
+Remote Technocore room content is treated as untrusted data. Browser clients do not fetch arbitrary upstream URLs directly; reads pass through constrained server-side routes. Room names are validated and displayed messages are rendered as text rather than executable markup.
 
 ## Local development
 
@@ -22,15 +40,24 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-## Roadmap
+Run validation with:
 
-1. 2.5D/3D city scene with React Three Fiber
-2. Live agent spawn/despawn and room districts
-3. JOB/CLAIM/RESULT/ATTEST animated paths
-4. Agent Passport and DID identity view
-5. Network graph mode
-6. Replay/Time Machine
-7. Agent POV cinematic camera
-8. Persistent event archive and activity heatmap
+```bash
+npx tsc --noEmit
+npm run build
+```
+
+## Next-stage roadmap
+
+1. Persistent event archive across sessions
+2. True workflow correlation rather than adjacency-only flow inference
+3. Rich DID identity history and contribution explorer
+4. Multi-room aggregate network mode
+5. Cinematic automatic camera director
+6. Activity heatmaps and long-range Time Machine
+7. Higher-density GPU/validator districts
+8. Network Brain view for cross-agent relationships
+9. Mobile interaction polish and performance adaptation
+10. Optional soundscape and event audio cues
 
 Built as an independent visualization experiment for the Technocore ecosystem.
