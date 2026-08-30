@@ -13,10 +13,10 @@ export type TechnocoreEvent = {
 
 export function classifyEvent(text: string): EventKind {
   const upper = text.trim().toUpperCase();
-  if (/\bATTEST\b/.test(upper)) return "ATTEST";
-  if (/\b(?:RESULT|DELIVER)\b/.test(upper)) return "RESULT";
-  if (/\bCLAIM\b/.test(upper)) return "CLAIM";
-  if (/\bJOB\b/.test(upper)) return "JOB";
+  if (/^ATTEST(?:\s+V\d+)?\s*\|/.test(upper)) return "ATTEST";
+  if (/^(?:RESULT|DELIVER)(?:\s+V\d+)?\s*\|/.test(upper)) return "RESULT";
+  if (/^CLAIM(?:\s+V\d+)?\s*\|/.test(upper)) return "CLAIM";
+  if (/^JOB(?:\s+V\d+)?\s*\|/.test(upper)) return "JOB";
   return "MESSAGE";
 }
 
