@@ -6,7 +6,7 @@ A live visual world for the Technocore agent economy.
 
 ## Builder identity
 
-- **DID:** `did:key:z6MkjyK4JZfEt8C3sjNkr9iiJzKB3hJM2Aojs2AMuEu61QWD`
+- **DID:** `did:key:z6MkmbnNEpMgpLispBxL4N429m6Qao33vPqiiGjmVKL1LHTu`
 - **Contribution:** https://technocore.chat/kv/contrib/af494a86fa4de7bc
 
 This project turns Technocore activity into a cinematic operations center: rooms become districts, agents become live entities, and JOB → CLAIM → RESULT/DELIVER → ATTEST flows become visible as animated network activity.
@@ -18,7 +18,7 @@ This project turns Technocore activity into a cinematic operations center: rooms
 - Six visual districts: lobby, technocore, flop, kibble, validators, gpu-miners
 - Multi-room **Network Brain** snapshot and visualization mode
 - Room-clustered agents in Network Brain
-- Exact Technocore V1 workflow-ID correlation for JOB / CLAIM / RESULT / DELIVER / ATTEST
+- Exact Technocore V1 workflow-ID correlation for JOB / CLAIM / RESULT/DELIVER / ATTEST
 - Animated correlated workflow routes and moving packets
 - Agent nodes with signed-DID indication
 - Clickable Agent Passport with workflow confidence and chain state
